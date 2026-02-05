@@ -1,0 +1,12 @@
+[project]
+name = "windows-locker"
+version = "1.0.0"
+description = "A Python application that locks Windows workstations and manages DNS blocking for YouTube based on API responses"
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+windows-locker = "windows_locker:main"

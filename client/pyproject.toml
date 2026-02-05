@@ -1,0 +1,11 @@
+[project]
+name = "windows-locker-client"
+version = "1.0.0"
+description = "Client application for Windows workstation locking and DNS management"
+requires-python = ">=3.7"
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+windows-locker = "windows_locker:main"
