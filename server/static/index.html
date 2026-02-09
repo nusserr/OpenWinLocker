@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windows Locker Management</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Windows Locker Management</h1>
+            <p>Manage client workstations and access controls</p>
+        </header>
+
+        <main>
+            <section class="stats">
+                <div class="stat-card">
+                    <h3>Total Clients</h3>
+                    <span id="total-clients">0</span>
+                </div>
+                <div class="stat-card">
+                    <h3>Unlocked</h3>
+                    <span id="unlocked-clients">0</span>
+                </div>
+                <div class="stat-card">
+                    <h3>Locked</h3>
+                    <span id="locked-clients">0</span>
+                </div>
+            </section>
+
+            <section class="actions">
+                <button id="refresh-btn" class="btn btn-primary">Refresh</button>
+                <button id="add-client-btn" class="btn btn-secondary">Add Client</button>
+            </section>
+
+            <section class="clients-table">
+                <h2>Client Management</h2>
+                <table id="clients-table">
+                    <thead>
+                        <tr>
+                            <th>Client Name</th>
+                            <th>Status</th>
+                            <th>YouTube Timer</th>
+                            <th>Last Updated</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clients-tbody">
+                        <!-- Clients will be populated here -->
+                    </tbody>
+                </table>
+            </section>
+        </main>
+
+        <!-- Add Client Modal -->
+        <div id="add-client-modal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <h2>Add New Client</h2>
+                <form id="add-client-form">
+                    <div class="form-group">
+                        <label for="client-name">Client Name:</label>
+                        <input type="text" id="client-name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="unlock-status">Unlock Status:</label>
+                        <select id="unlock-status">
+                            <option value="false">Locked</option>
+                            <option value="true">Unlocked</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="youtube-timer">YouTube Timer (seconds):</label>
+                        <input type="number" id="youtube-timer" value="300" min="0">
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Add Client</button>
+                        <button type="button" class="btn btn-secondary cancel-btn">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Edit Client Modal -->
+        <div id="edit-client-modal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <h2>Edit Client</h2>
+                <form id="edit-client-form">
+                    <input type="hidden" id="edit-client-name">
+                    <div class="form-group">
+                        <label for="edit-unlock-status">Unlock Status:</label>
+                        <select id="edit-unlock-status">
+                            <option value="false">Locked</option>
+                            <option value="true">Unlocked</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-youtube-timer">YouTube Timer (seconds):</label>
+                        <input type="number" id="edit-youtube-timer" min="0">
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                        <button type="button" class="btn btn-secondary cancel-btn">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

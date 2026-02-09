@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Dict, Optional
 import time
@@ -10,6 +12,9 @@ app = FastAPI(
     title="Windows Locker Server",
     description="API for managing Windows workstation locks and DNS blocking",
 )
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # Data models
@@ -89,7 +94,12 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    return {"message": "Windows Locker Server is running"}
+    return FileResponse("static/index.html")
+
+
+@app.get("/api")
+async def api_root():
+    return {"message": "Windows Locker Server API is running"}
 
 
 @app.get("/clients")
