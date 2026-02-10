@@ -125,7 +125,10 @@ class ClientManager {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ unlock_allowed: newStatus })
+                body: JSON.stringify({ 
+                    client_name: clientName,
+                    unlock_allowed: newStatus 
+                })
             });
 
             if (response.ok) {

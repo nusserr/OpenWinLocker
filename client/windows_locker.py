@@ -43,22 +43,35 @@ class WindowsLocker:
 
     def check_unlock_condition(self) -> bool:
         """Check API for unlock condition"""
-        try:
-            response = requests.get(self.api_url, timeout=5)
-            response.raise_for_status()
-            data = response.json()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(self.api_url, timeout=5)
+                response.raise_for_status()
+                data = response.json()
 
-            # Assuming API returns {"unlock": true/false} or similar
-            should_unlock = data.get("unlock", False)
-            logger.info(f"Unlock condition: {should_unlock}")
-            return should_unlock
+                # API returns {"unlock": true/false} or similar
+                should_unlock = data.get("unlock", False)
+                logger.info(f"Unlock condition: {should_unlock}")
+                return should_unlock
 
-        except requests.RequestException as e:
-            logger.error(f"Error checking unlock condition: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Error parsing unlock response: {e}")
-            return False
+            except requests.RequestException as e:
+                logger.error(
+                    f"Error checking unlock condition (attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2)  # Wait before retry
+                    continue
+                return False
+            except Exception as e:
+                logger.error(
+                    f"Error parsing unlock response (attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2)  # Wait before retry
+                    continue
+                return False
+        return False
 
     def get_dns_timer_value(self) -> Optional[int]:
         """Get timer value from API for DNS operations"""
@@ -197,35 +210,87 @@ class WindowsLocker:
             self.dns_thread.join(timeout=5)
             logger.info("DNS manager thread stopped")
 
-    def run(self):
-        """Main application loop"""
-        logger.info("Starting Windows Locker application")
-
-        # Start DNS manager
-        self.start_dns_manager()
-
+    def is_workstation_locked(self) -> bool:
+        """Check if the workstation is currently locked"""
         try:
-            while True:
-                # Check if we should unlock
-                if self.is_locked and self.check_unlock_condition():
-                    logger.info("Unlock condition met, keeping workstation unlocked")
-                    self.is_locked = False
-                    time.sleep(10)  # Wait before next check
-                    continue
+            # Use a more reliable method to detect if workstation is locked
+            # Check if there's any foreground window - if not, likely locked
+            hwnd = self.user32.GetForegroundWindow()
+            return hwnd == 0
+        except Exception as e:
+            logger.error(f"Error checking workstation lock state: {e}")
+            return False
 
-                # If not locked, lock it
-                if not self.is_locked:
-                    self.lock_workstation()
+    def enforce_lock_state(self, should_be_unlocked: bool):
+        """Enforce the server's lock state on the workstation"""
+        is_currently_locked = self.is_workstation_locked()
+
+        if should_be_unlocked and is_currently_locked:
+            logger.info(
+                "Server says unlock, but workstation is locked - this is normal behavior"
+            )
+            # We can't programmatically unlock, just wait for user
+            self.is_locked = False
+        elif not should_be_unlocked and not is_currently_locked:
+            logger.info("Server says lock, but workstation is unlocked - locking now")
+            self.lock_workstation()
+        elif not should_be_unlocked and is_currently_locked:
+            logger.info("Server says lock and workstation is locked - correct state")
+            self.is_locked = True
+        elif should_be_unlocked and not is_currently_locked:
+            logger.info(
+                "Server says unlock and workstation is unlocked - correct state"
+            )
+            self.is_locked = False
+
+
+def run(self):
+    """Main application loop"""
+    logger.info("Starting Windows Locker application")
+
+    # Start DNS manager
+    self.start_dns_manager()
+
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+
+    try:
+        while True:
+            try:
+                # Always check the server for the current state
+                should_be_unlocked = self.check_unlock_condition()
+
+                # Reset error counter on successful check
+                consecutive_errors = 0
+
+                # Enforce the server's lock state
+                self.enforce_lock_state(should_be_unlocked)
 
                 # Wait before next check
                 time.sleep(5)
 
-        except KeyboardInterrupt:
-            logger.info("Application stopped by user")
-        except Exception as e:
-            logger.error(f"Unexpected error in main loop: {e}")
-        finally:
-            self.stop_dns_manager()
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(
+                    f"Error in main loop (consecutive errors: {consecutive_errors}): {e}"
+                )
+
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.error(
+                        f"Too many consecutive errors ({max_consecutive_errors}), locking workstation for safety"
+                    )
+                    self.lock_workstation()
+                    consecutive_errors = 0  # Reset after taking safety action
+
+                # Wait longer after errors
+                time.sleep(10)
+
+    except KeyboardInterrupt:
+        logger.info("Application stopped by user")
+    except Exception as e:
+        logger.error(f"Unexpected error in main loop: {e}")
+    finally:
+        self.stop_dns_manager()
 
 
 def main():

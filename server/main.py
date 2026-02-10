@@ -142,18 +142,18 @@ async def get_unlock_status(client_name: str):
 
 
 @app.post("/client/{client_name}/unlock-status")
-async def set_unlock_status(client_name: str, unlock_allowed: bool):
+async def set_unlock_status(client_name: str, request: LockRequest):
     """Set unlock status for a specific client"""
     if client_name not in client_configs:
         client_configs[client_name] = ClientConfig()
 
-    client_configs[client_name].unlock_allowed = unlock_allowed
+    client_configs[client_name].unlock_allowed = request.unlock_allowed
     client_configs[client_name].last_updated = datetime.now()
     save_configs()
 
     return {
         "client_name": client_name,
-        "unlock": unlock_allowed,
+        "unlock": request.unlock_allowed,
         "message": f"Unlock status updated for {client_name}",
         "timestamp": datetime.now().isoformat(),
     }
@@ -180,21 +180,21 @@ async def get_youtube_timer(client_name: str):
 
 
 @app.post("/client/{client_name}/youtube-timer")
-async def set_youtube_timer(client_name: str, timer_seconds: int):
+async def set_youtube_timer(client_name: str, request: YouTubeTimerRequest):
     """Set YouTube timer for a specific client"""
-    if timer_seconds < 0:
+    if request.timer_seconds < 0:
         raise HTTPException(status_code=400, detail="Timer seconds must be positive")
 
     if client_name not in client_configs:
         client_configs[client_name] = ClientConfig()
 
-    client_configs[client_name].youtube_timer_seconds = timer_seconds
+    client_configs[client_name].youtube_timer_seconds = request.timer_seconds
     client_configs[client_name].last_updated = datetime.now()
     save_configs()
 
     return {
         "client_name": client_name,
-        "timer_seconds": timer_seconds,
+        "timer_seconds": request.timer_seconds,
         "message": f"YouTube timer updated for {client_name}",
         "timestamp": datetime.now().isoformat(),
     }
