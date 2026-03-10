@@ -11,8 +11,8 @@
 Run on your Windows machine:
 
 ```cmd
-pip install pyinstaller requests
-pyinstaller --onefile --name WindowsLocker client/windows_locker.py
+uv pip install pyinstaller requests
+uv pyinstaller --onefile --name WindowsLocker client/windows_locker.py
 ```
 
 The exe will be created at `dist/WindowsLocker.exe`
