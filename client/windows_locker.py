@@ -6,6 +6,7 @@ import threading
 import logging
 from typing import Optional
 import os
+import socket
 
 # Configure logging
 logging.basicConfig(
@@ -296,21 +297,17 @@ def run(self):
 def main():
     import sys
 
-    # Get client name from command line or use hostname
-    if len(sys.argv) > 1:
-        client_name = sys.argv[1]
-    else:
-        import socket
+    client_name = os.environ.get("CLIENT_NAME") or (len(sys.argv) > 1 and sys.argv[1])
 
+    if client_name is None:
         client_name = socket.gethostname()
         logger.info(f"No client name provided, using hostname: {client_name}")
 
-    # Configuration - update these URLs
-    SERVER_URL = "http://localhost:8000"
-    API_URL = f"{SERVER_URL}/client/{client_name}/unlock-status"
-    DNS_TIMER_API_URL = f"{SERVER_URL}/client/{client_name}/youtube-timer"
+    server_url = os.environ.get("SERVER_URL") or "http://localhost:8000"
+    API_URL = f"{server_url}/client/{client_name}/unlock-status"
+    DNS_TIMER_API_URL = f"{server_url}/client/{client_name}/youtube-timer"
 
-    logger.info(f"Starting client '{client_name}' connecting to {SERVER_URL}")
+    logger.info(f"Starting client '{client_name}' connecting to {server_url}")
 
     # Check if running as administrator for DNS operations
     try:
