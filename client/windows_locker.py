@@ -4,7 +4,8 @@ import time
 import subprocess
 import threading
 import logging
-from typing import Optional
+import platform
+from typing import Optional, List
 import os
 import socket
 
@@ -15,13 +16,103 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class USBMonitor:
+    def __init__(self, allowed_serials: List[str], polling_interval: int = 5):
+        self.allowed_serials = [s.strip() for s in allowed_serials if s.strip()]
+        self.polling_interval = polling_interval
+        self.is_usb_present = False
+        self._monitor_thread = None
+        self._stop_event = threading.Event()
+
+    def _get_connected_usb_serials(self) -> List[str]:
+        """Get serial numbers of connected USB drives on Windows."""
+        if platform.system() != "Windows":
+            return []
+
+        try:
+            from win32com.client import GetObject
+
+            wmi = GetObject("winmgmts:")
+            usb_devices = wmi.ExecQuery(
+                "SELECT * FROM Win32_PnPEntity WHERE Service='USBSTOR'"
+            )
+            serials = []
+            for device in usb_devices:
+                device_id = device.DeviceID
+                if "USBSTOR" in device_id and "\\" in device_id:
+                    parts = device_id.split("\\")
+                    if len(parts) > 2:
+                        serial_candidate = parts[-1]
+                        if len(serial_candidate) > 4 and not (
+                            serial_candidate.startswith("MSFT")
+                            or serial_candidate.startswith("GENERIC")
+                        ):
+                            serials.append(serial_candidate)
+            logger.debug(f"Detected USB serials: {serials}")
+            return serials
+        except ImportError:
+            logger.warning("pywin32 not installed. USB monitoring disabled.")
+            return []
+        except Exception as e:
+            logger.error(f"Error getting USB serials: {e}")
+            return []
+
+    def _monitor_loop(self):
+        logger.info("USB monitoring started")
+        while not self._stop_event.is_set():
+            try:
+                current_serials = self._get_connected_usb_serials()
+                allowed_present = any(
+                    s in self.allowed_serials for s in current_serials
+                )
+
+                if allowed_present and not self.is_usb_present:
+                    self.is_usb_present = True
+                    logger.info("Allowed USB inserted - PC will stay unlocked")
+                elif not allowed_present and self.is_usb_present:
+                    self.is_usb_present = False
+                    logger.info("Allowed USB removed")
+
+            except Exception as e:
+                logger.error(f"Error in USB monitor loop: {e}")
+
+            time.sleep(self.polling_interval)
+        logger.info("USB monitoring stopped")
+
+    def start(self):
+        if not self.allowed_serials:
+            logger.info("No USB serials configured - USB unlock disabled")
+            return
+
+        self._stop_event.clear()
+        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=5)
+
+    def is_allowed_usb_inserted(self) -> bool:
+        """Check if the allowed USB is currently inserted."""
+        return self.is_usb_present
+
+
 class WindowsLocker:
-    def __init__(self, api_url: str, dns_timer_api_url: str):
+    def __init__(
+        self,
+        api_url: str,
+        dns_timer_api_url: str,
+        allowed_usb_serials: List[str] = None,
+    ):
         self.api_url = api_url
         self.dns_timer_api_url = dns_timer_api_url
         self.is_locked = False
         self.dns_thread = None
         self.stop_dns_thread = False
+
+        # USB monitor
+        self.usb_monitor = USBMonitor(allowed_usb_serials or [])
 
         # Load Windows API
         self.user32 = ctypes.windll.user32
@@ -226,11 +317,21 @@ class WindowsLocker:
         """Enforce the server's lock state on the workstation"""
         is_currently_locked = self.is_workstation_locked()
 
+        # Check if allowed USB is inserted - if so, force unlock
+        if self.usb_monitor.is_allowed_usb_inserted():
+            if is_currently_locked:
+                logger.info(
+                    "Allowed USB inserted - workstation should unlock (user must unlock manually)"
+                )
+            else:
+                logger.info("Allowed USB inserted - keeping workstation unlocked")
+            self.is_locked = False
+            return
+
         if should_be_unlocked and is_currently_locked:
             logger.info(
                 "Server says unlock, but workstation is locked - this is normal behavior"
             )
-            # We can't programmatically unlock, just wait for user
             self.is_locked = False
         elif not should_be_unlocked and not is_currently_locked:
             logger.info("Server says lock, but workstation is unlocked - locking now")
@@ -248,6 +349,9 @@ class WindowsLocker:
 def run(self):
     """Main application loop"""
     logger.info("Starting Windows Locker application")
+
+    # Start USB monitor
+    self.usb_monitor.start()
 
     # Start DNS manager
     self.start_dns_manager()
@@ -292,6 +396,7 @@ def run(self):
         logger.error(f"Unexpected error in main loop: {e}")
     finally:
         self.stop_dns_manager()
+        self.usb_monitor.stop()
 
 
 def main():
@@ -307,6 +412,15 @@ def main():
     API_URL = f"{server_url}/client/{client_name}/unlock-status"
     DNS_TIMER_API_URL = f"{server_url}/client/{client_name}/youtube-timer"
 
+    # Parse allowed USB serials from environment (comma-separated)
+    usb_serials_env = os.environ.get("ALLOWED_USB_SERIALS", "")
+    allowed_usb_serials = [s.strip() for s in usb_serials_env.split(",") if s.strip()]
+
+    if allowed_usb_serials:
+        logger.info(f"USB unlock enabled for: {allowed_usb_serials}")
+    else:
+        logger.info("No USB serials configured - USB unlock disabled")
+
     logger.info(f"Starting client '{client_name}' connecting to {server_url}")
 
     # Check if running as administrator for DNS operations
@@ -320,7 +434,7 @@ def main():
         logger.warning("Unable to check administrator status")
 
     # Create and run the locker
-    locker = WindowsLocker(API_URL, DNS_TIMER_API_URL)
+    locker = WindowsLocker(API_URL, DNS_TIMER_API_URL, allowed_usb_serials)
     locker.run()
 
 

@@ -5,6 +5,7 @@ description = "Client application for Windows workstation locking and DNS manage
 requires-python = ">=3.7"
 dependencies = [
     "requests>=2.31.0",
+    "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.scripts]

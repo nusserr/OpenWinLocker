@@ -2,9 +2,9 @@
 # Run this on Windows with Python installed
 
 # Install dependencies
-uv pip install pyinstaller requests
+uv pip install pyinstaller requests pywin32
 
 # Build the exe (onefile for easier distribution)
-uv pyinstaller --onefile --name WindowsLocker client/windows_locker.py
+uv run pyinstaller --onefile --name WindowsLocker client/windows_locker.py
 
 # Output will be in dist/WindowsLocker.exe
