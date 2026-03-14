@@ -8,6 +8,7 @@ import platform
 from typing import Optional, List
 import os
 import socket
+from datetime import datetime, timedelta
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +24,7 @@ class USBMonitor:
         self.is_usb_present = False
         self._monitor_thread = None
         self._stop_event = threading.Event()
+        self._initial_check_done = threading.Event()
 
     def _get_connected_usb_serials(self) -> List[str]:
         """Get serial numbers of connected USB drives on Windows."""
@@ -39,10 +41,13 @@ class USBMonitor:
             serials = []
             for device in usb_devices:
                 device_id = device.DeviceID
-                if "USBSTOR" in device_id and "\\" in device_id:
+                if device_id and ("USBSTOR" in device_id or "USB\\" in device_id) and "\\" in device_id:
                     parts = device_id.split("\\")
                     if len(parts) > 2:
                         serial_candidate = parts[-1]
+                        # Remove any suffix like &0 if present
+                        if "&" in serial_candidate:
+                            serial_candidate = serial_candidate.split("&")[0]
                         if len(serial_candidate) > 4 and not (
                             serial_candidate.startswith("MSFT")
                             or serial_candidate.startswith("GENERIC")
@@ -76,6 +81,7 @@ class USBMonitor:
             except Exception as e:
                 logger.error(f"Error in USB monitor loop: {e}")
 
+            self._initial_check_done.set()
             time.sleep(self.polling_interval)
         logger.info("USB monitoring stopped")
 
@@ -85,8 +91,12 @@ class USBMonitor:
             return
 
         self._stop_event.clear()
+        self._initial_check_done.clear()
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
+        
+        logger.info("Waiting for initial USB check...")
+        self._initial_check_done.wait(timeout=10)
 
     def stop(self):
         self._stop_event.set()
@@ -111,6 +121,11 @@ class WindowsLocker:
         self.dns_thread = None
         self.stop_dns_thread = False
 
+        # Lock pending state
+        self.lock_warning_time: Optional[datetime] = None
+        self.lock_grace_period_seconds = 300  # 5 minutes
+        self.warning_shown = False
+
         # USB monitor
         self.usb_monitor = USBMonitor(allowed_usb_serials or [])
 
@@ -118,13 +133,30 @@ class WindowsLocker:
         self.user32 = ctypes.windll.user32
         self.kernel32 = ctypes.windll.kernel32
 
+    def show_warning_toast(self):
+        """Show a system-modal Windows MessageBox warning about the impending lock"""
+        try:
+            def show_message():
+                # MB_OK (0) | MB_ICONWARNING (0x30) | MB_SYSTEMMODAL (0x1000) (Stops user and forces on top)
+                self.user32.MessageBoxW(0, "Your computer will be locked in 5 minutes. Please save your work.", "Locker Warning", 0x30 | 0x1000)
+            
+            # Run in a thread so it doesn't block the main enforcement loop
+            msg_thread = threading.Thread(target=show_message, daemon=True)
+            msg_thread.start()
+            logger.info("Displayed 5-minute system-modal lock warning")
+        except Exception as e:
+            logger.error(f"Failed to show warning notification: {e}")
+
     def lock_workstation(self) -> bool:
         """Lock the Windows workstation"""
         try:
             result = self.user32.LockWorkStation()
+            print("Locking workstation...")
             if result:
                 logger.info("Workstation locked successfully")
                 self.is_locked = True
+                self.lock_warning_time = None
+                self.warning_shown = False
                 return True
             else:
                 logger.error("Failed to lock workstation")
@@ -316,87 +348,116 @@ class WindowsLocker:
     def enforce_lock_state(self, should_be_unlocked: bool):
         """Enforce the server's lock state on the workstation"""
         is_currently_locked = self.is_workstation_locked()
+        usb_enabled = len(self.usb_monitor.allowed_serials) > 0
 
-        # Check if allowed USB is inserted - if so, force unlock
-        if self.usb_monitor.is_allowed_usb_inserted():
+        # Determine target state based on USB and Server
+        target_unlock = should_be_unlocked
+        
+        # If USB is configured and inserted, it ALWAYS overrides the server value to keep unlocked
+        if usb_enabled and self.usb_monitor.is_allowed_usb_inserted():
+            target_unlock = True
+            
+        if target_unlock:
+            # Cancel any pending lock if we are now allowed to stay unlocked
+            if self.lock_warning_time is not None:
+                logger.info("Unlock condition met. Cancelling impending lock.")
+                self.lock_warning_time = None
+                self.warning_shown = False
+
             if is_currently_locked:
                 logger.info(
-                    "Allowed USB inserted - workstation should unlock (user must unlock manually)"
+                    "Workstation should be unlocked, but is currently locked (user must unlock manually)"
                 )
             else:
-                logger.info("Allowed USB inserted - keeping workstation unlocked")
+                logger.info("Keeping workstation unlocked")
             self.is_locked = False
-            return
-
-        if should_be_unlocked and is_currently_locked:
-            logger.info(
-                "Server says unlock, but workstation is locked - this is normal behavior"
-            )
-            self.is_locked = False
-        elif not should_be_unlocked and not is_currently_locked:
-            logger.info("Server says lock, but workstation is unlocked - locking now")
-            self.lock_workstation()
-        elif not should_be_unlocked and is_currently_locked:
-            logger.info("Server says lock and workstation is locked - correct state")
-            self.is_locked = True
-        elif should_be_unlocked and not is_currently_locked:
-            logger.info(
-                "Server says unlock and workstation is unlocked - correct state"
-            )
-            self.is_locked = False
-
-
-def run(self):
-    """Main application loop"""
-    logger.info("Starting Windows Locker application")
-
-    # Start USB monitor
-    self.usb_monitor.start()
-
-    # Start DNS manager
-    self.start_dns_manager()
-
-    consecutive_errors = 0
-    max_consecutive_errors = 5
-
-    try:
-        while True:
-            try:
-                # Always check the server for the current state
-                should_be_unlocked = self.check_unlock_condition()
-
-                # Reset error counter on successful check
-                consecutive_errors = 0
-
-                # Enforce the server's lock state
-                self.enforce_lock_state(should_be_unlocked)
-
-                # Wait before next check
-                time.sleep(5)
-
-            except Exception as e:
-                consecutive_errors += 1
-                logger.error(
-                    f"Error in main loop (consecutive errors: {consecutive_errors}): {e}"
-                )
-
-                if consecutive_errors >= max_consecutive_errors:
-                    logger.error(
-                        f"Too many consecutive errors ({max_consecutive_errors}), locking workstation for safety"
-                    )
+        else:
+            # We need to be locked
+            if not is_currently_locked:
+                # If we were previously fully locked (e.g. grace period expired and we locked the PC),
+                # but the user manually unlocked it somehow, DO NOT give another 5 minutes. Lock immediately.
+                if self.is_locked:
+                    logger.warning("Workstation was manually unlocked during a required lock state. Locking immediately.")
                     self.lock_workstation()
-                    consecutive_errors = 0  # Reset after taking safety action
+                # Otherwise, if we aren't locked yet and weren't previously fully locked, start or check the grace period
+                elif self.lock_warning_time is None:
+                    # Start the countdown
+                    logger.info("Starting 5-minute grace period before locking")
+                    self.lock_warning_time = datetime.now()
+                    self.show_warning_toast()
+                    self.warning_shown = True
+                else:
+                    # Check if countdown has expired
+                    elapsed = (datetime.now() - self.lock_warning_time).total_seconds()
+                    remaining = int(self.lock_grace_period_seconds - elapsed)
+                    if remaining <= 0:
+                        logger.info("Grace period expired. Locking now.")
+                        self.lock_workstation()
+                    else:
+                        if remaining % 60 < 5:  # Log roughly every minute
+                            logger.info(f"Locking in {remaining} seconds...")
+            else:
+                logger.info("Workstation is locked - correct state")
+                self.is_locked = True
+                self.lock_warning_time = None
+                self.warning_shown = False
 
-                # Wait longer after errors
-                time.sleep(10)
 
-    except KeyboardInterrupt:
-        logger.info("Application stopped by user")
-    except Exception as e:
-        logger.error(f"Unexpected error in main loop: {e}")
-    finally:
-        self.stop_dns_manager()
-        self.usb_monitor.stop()
+    def run(self):
+        """Main application loop"""
+        logger.info("Starting Windows Locker application")
+
+        # Start USB monitor
+        self.usb_monitor.start()
+
+        # Start DNS manager
+        self.start_dns_manager()
+
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+
+        try:
+            while True:
+                try:
+                    # Always check the server for the current state
+                    should_be_unlocked = self.check_unlock_condition()
+
+                    # Reset error counter on successful check
+                    consecutive_errors = 0
+
+                    # Enforce the server's lock state
+                    self.enforce_lock_state(should_be_unlocked)
+
+                    # Wait before next check
+                    time.sleep(5)
+
+                except Exception as e:
+                    consecutive_errors += 1
+                    logger.error(
+                        f"Error in main loop (consecutive errors: {consecutive_errors}): {e}"
+                    )
+
+                    if consecutive_errors >= max_consecutive_errors:
+                        usb_enabled = len(self.usb_monitor.allowed_serials) > 0
+                        if usb_enabled and self.usb_monitor.is_allowed_usb_inserted():
+                            logger.error(f"Too many consecutive errors ({max_consecutive_errors}), but allowed USB is inserted. Keeping workstation unlocked.")
+                        else:
+                            logger.error(
+                                f"Too many consecutive errors ({max_consecutive_errors}), locking workstation for safety"
+                            )
+                            self.lock_workstation()
+                        consecutive_errors = 0  # Reset after taking safety action
+
+                    # Wait longer after errors
+                    time.sleep(10)
+
+        except KeyboardInterrupt:
+            logger.info("Application stopped by user")
+        except Exception as e:
+            logger.error(f"Unexpected error in main loop: {e}")
+        finally:
+            self.stop_dns_manager()
+            self.usb_monitor.stop()
 
 
 def main():
@@ -414,6 +475,7 @@ def main():
 
     # Parse allowed USB serials from environment (comma-separated)
     usb_serials_env = os.environ.get("ALLOWED_USB_SERIALS", "")
+    print(usb_serials_env)
     allowed_usb_serials = [s.strip() for s in usb_serials_env.split(",") if s.strip()]
 
     if allowed_usb_serials:

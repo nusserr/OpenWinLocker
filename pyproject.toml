@@ -5,6 +5,8 @@ description = "A Python application that locks Windows workstations and manages 
 readme = "README.md"
 requires-python = ">=3.7"
 dependencies = [
+    "plyer>=2.1.0",
+    "pywin32>=311",
     "requests>=2.31.0",
 ]
 
