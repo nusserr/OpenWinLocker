@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 import json
 import os
+import argparse
 
 app = FastAPI(
     title="Windows Locker Server",
@@ -38,7 +39,7 @@ class YouTubeTimerRequest(BaseModel):
 # In production, this should be replaced with a database
 client_configs: Dict[str, ClientConfig] = {}
 
-# Configuration file path
+# Configuration file path (can be overridden via --config-file CLI arg)
 CONFIG_FILE = "client_configs.json"
 
 
@@ -230,4 +231,28 @@ async def configure_client(client_name: str, config: ClientConfig):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    parser = argparse.ArgumentParser(
+        description="Windows Locker Server - Manage Windows workstation locks and DNS blocking"
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to bind to (default: 8000)",
+    )
+    parser.add_argument(
+        "--config-file",
+        dest="config_file",
+        default="client_configs.json",
+        help="Path to the client configurations file (default: client_configs.json)",
+    )
+    args = parser.parse_args()
+
+    CONFIG_FILE = args.config_file
+
+    uvicorn.run(app, host=args.host, port=args.port)

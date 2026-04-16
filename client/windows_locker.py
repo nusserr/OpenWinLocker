@@ -5,6 +5,8 @@ import subprocess
 import threading
 import logging
 import platform
+import argparse
+import sys
 from typing import Optional, List
 import os
 import socket
@@ -41,7 +43,11 @@ class USBMonitor:
             serials = []
             for device in usb_devices:
                 device_id = device.DeviceID
-                if device_id and ("USBSTOR" in device_id or "USB\\" in device_id) and "\\" in device_id:
+                if (
+                    device_id
+                    and ("USBSTOR" in device_id or "USB\\" in device_id)
+                    and "\\" in device_id
+                ):
                     parts = device_id.split("\\")
                     if len(parts) > 2:
                         serial_candidate = parts[-1]
@@ -94,7 +100,7 @@ class USBMonitor:
         self._initial_check_done.clear()
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
-        
+
         logger.info("Waiting for initial USB check...")
         self._initial_check_done.wait(timeout=10)
 
@@ -136,10 +142,16 @@ class WindowsLocker:
     def show_warning_toast(self):
         """Show a system-modal Windows MessageBox warning about the impending lock"""
         try:
+
             def show_message():
                 # MB_OK (0) | MB_ICONWARNING (0x30) | MB_SYSTEMMODAL (0x1000) (Stops user and forces on top)
-                self.user32.MessageBoxW(0, "Your computer will be locked in 5 minutes. Please save your work.", "Locker Warning", 0x30 | 0x1000)
-            
+                self.user32.MessageBoxW(
+                    0,
+                    "Your computer will be locked in 5 minutes. Please save your work.",
+                    "Locker Warning",
+                    0x30 | 0x1000,
+                )
+
             # Run in a thread so it doesn't block the main enforcement loop
             msg_thread = threading.Thread(target=show_message, daemon=True)
             msg_thread.start()
@@ -352,11 +364,11 @@ class WindowsLocker:
 
         # Determine target state based on USB and Server
         target_unlock = should_be_unlocked
-        
+
         # If USB is configured and inserted, it ALWAYS overrides the server value to keep unlocked
         if usb_enabled and self.usb_monitor.is_allowed_usb_inserted():
             target_unlock = True
-            
+
         if target_unlock:
             # Cancel any pending lock if we are now allowed to stay unlocked
             if self.lock_warning_time is not None:
@@ -377,7 +389,9 @@ class WindowsLocker:
                 # If we were previously fully locked (e.g. grace period expired and we locked the PC),
                 # but the user manually unlocked it somehow, DO NOT give another 5 minutes. Lock immediately.
                 if self.is_locked:
-                    logger.warning("Workstation was manually unlocked during a required lock state. Locking immediately.")
+                    logger.warning(
+                        "Workstation was manually unlocked during a required lock state. Locking immediately."
+                    )
                     self.lock_workstation()
                 # Otherwise, if we aren't locked yet and weren't previously fully locked, start or check the grace period
                 elif self.lock_warning_time is None:
@@ -401,7 +415,6 @@ class WindowsLocker:
                 self.is_locked = True
                 self.lock_warning_time = None
                 self.warning_shown = False
-
 
     def run(self):
         """Main application loop"""
@@ -440,7 +453,9 @@ class WindowsLocker:
                     if consecutive_errors >= max_consecutive_errors:
                         usb_enabled = len(self.usb_monitor.allowed_serials) > 0
                         if usb_enabled and self.usb_monitor.is_allowed_usb_inserted():
-                            logger.error(f"Too many consecutive errors ({max_consecutive_errors}), but allowed USB is inserted. Keeping workstation unlocked.")
+                            logger.error(
+                                f"Too many consecutive errors ({max_consecutive_errors}), but allowed USB is inserted. Keeping workstation unlocked."
+                            )
                         else:
                             logger.error(
                                 f"Too many consecutive errors ({max_consecutive_errors}), locking workstation for safety"
@@ -460,23 +475,60 @@ class WindowsLocker:
             self.usb_monitor.stop()
 
 
-def main():
-    import sys
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Windows Locker Client - Lock/unlock Windows workstations based on server state"
+    )
+    parser.add_argument(
+        "--client-name",
+        dest="client_name",
+        help="Client identifier (default: hostname)",
+    )
+    parser.add_argument(
+        "--server-url",
+        dest="server_url",
+        default="http://localhost:8000",
+        help="Server base URL (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--allowed-usb-serials",
+        dest="usb_serials",
+        action="append",
+        help="USB serial numbers allowed to keep workstation unlocked (can be specified multiple times)",
+    )
+    parser.add_argument(
+        "--env",
+        action="store_true",
+        help="Also read CLIENT_NAME, SERVER_URL, and ALLOWED_USB_SERIALS from environment variables (CLI args take precedence)",
+    )
+    return parser.parse_args()
 
-    client_name = os.environ.get("CLIENT_NAME") or (len(sys.argv) > 1 and sys.argv[1])
+
+def main():
+    args = parse_args()
+
+    client_name = args.client_name
+    if args.env:
+        client_name = os.environ.get("CLIENT_NAME", client_name)
 
     if client_name is None:
         client_name = socket.gethostname()
         logger.info(f"No client name provided, using hostname: {client_name}")
 
-    server_url = os.environ.get("SERVER_URL") or "http://localhost:8000"
+    server_url = args.server_url
+    if args.env:
+        server_url = os.environ.get("SERVER_URL", server_url)
+
     API_URL = f"{server_url}/client/{client_name}/unlock-status"
     DNS_TIMER_API_URL = f"{server_url}/client/{client_name}/youtube-timer"
 
-    # Parse allowed USB serials from environment (comma-separated)
-    usb_serials_env = os.environ.get("ALLOWED_USB_SERIALS", "")
-    print(usb_serials_env)
-    allowed_usb_serials = [s.strip() for s in usb_serials_env.split(",") if s.strip()]
+    allowed_usb_serials = args.usb_serials or []
+    if args.env:
+        usb_serials_env = os.environ.get("ALLOWED_USB_SERIALS", "")
+        env_serials = [s.strip() for s in usb_serials_env.split(",") if s.strip()]
+        for serial in env_serials:
+            if serial not in allowed_usb_serials:
+                allowed_usb_serials.append(serial)
 
     if allowed_usb_serials:
         logger.info(f"USB unlock enabled for: {allowed_usb_serials}")
